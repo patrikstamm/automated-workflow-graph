@@ -14,6 +14,7 @@ LABELS = {
     "human_gate_coverage": "Missing human approval",
     "tool_declarations": "Tool not named",
     "data_flow": "Value read before it is written",
+    "soundness": "Branches do not fit together",
 }
 
 

@@ -16,3 +16,5 @@ class VerifyConfig:
     sensitive_tools: frozenset[str] = field(default_factory=frozenset)  # tool names that need a human step before them
     order_rules: tuple[OrderRule, ...] = ()
     inputs: frozenset[str] = field(default_factory=frozenset)  # values available at the start (e.g. "email")
+    max_states: int = 10_000                               # soundness search bound (DECISIONS.md section 4, suggestion 2)
+    timeout_s: float = 2.0                                 # soundness search time bound, in seconds

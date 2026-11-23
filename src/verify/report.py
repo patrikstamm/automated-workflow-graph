@@ -14,6 +14,8 @@ Status = Literal["PASS", "FAIL", "INCONCLUSIVE"]
 
 PARALLEL_NOTE = ("The path goes through parallel branches. AgentProof checks parallel branches as if only one "
                  "of them runs, so this may be a false alarm. Not sent to repair.")
+SEARCH_LIMIT_NOTE = ("A search bound was hit, so soundness is neither proved nor disproved. "
+                     "Not sent to repair.")
 
 
 @dataclass
@@ -126,6 +128,35 @@ def _findings_for(graph: WorkflowGraph, check: CheckResult) -> list[Finding]:
                       if m["written_anywhere"] else "no step in the workflow writes it")
             findings.append(Finding(o, cid, "FAIL", [step], path(m["witness"]),
                                     f'Step "{step}" reads "{value}", but {reason}.'))
+        return findings
+
+    if cid == "soundness":
+        findings = []
+        for fault in raw["faults"]:
+            step = origin_of(fault["node"])
+            split = origin_of(fault["split"]) if fault["split"] else ""
+            if fault["kind"] == "lack_of_sync" and fault["loop"]:
+                message = (f'Step "{split}" starts parallel branches and one of them loops back to "{step}", '
+                           f'so "{step}" runs again while the rest of the workflow goes on. '
+                           f'Use a router to choose between looping back and going on.')
+            elif fault["kind"] == "lack_of_sync":
+                message = (f'Step "{step}" is reached by several parallel branches but does not wait for '
+                           f'all of them ("join": "all"), so it runs more than once.')
+            elif fault["loop"]:
+                message = (f'Step "{step}" waits for all its incoming branches ("join": "all"), but one of them '
+                           f'only comes back from the loop at "{split}", so it can never run the first time. '
+                           f'Use "join": "any".')
+            else:
+                message = (f'Step "{step}" waits for all its incoming branches ("join": "all"), but not '
+                           f'all of them can arrive, so the workflow gets stuck there. '
+                           f'Use "join": "any" if only one of them runs.')
+            findings.append(Finding(o, cid, "FAIL", [step], path(fault["witness"]), message))
+        if raw["limit"]:
+            limit = raw["limit"]
+            findings.append(Finding(o, cid, "INCONCLUSIVE", [], [],
+                                    f'The soundness search stopped at its limit ({limit["bound"]} = '
+                                    f'{limit["value"]}) after {limit["states"]} states.',
+                                    note=SEARCH_LIMIT_NOTE))
         return findings
 
     # Unknown check (e.g. a newer AgentProof): report it rather than drop it.

@@ -7,9 +7,10 @@ import time
 from src.schema import WorkflowGraph
 from src.verify.config import VerifyConfig
 from src.verify.ours.data_flow import check_data_flow
+from src.verify.ours.soundness import check_soundness
 from src.verify.report import CheckResult
 
-CHECKS = (check_data_flow,)
+CHECKS = (check_data_flow, check_soundness)
 
 
 def run_ours(graph: WorkflowGraph, config: VerifyConfig) -> tuple[list[CheckResult], dict[str, float]]:

@@ -31,7 +31,7 @@ def test_clean_examples_pass(name):
     assert report.verdict == "PASS"
     assert report.findings == []
     assert {c.check_id for c in report.checks if c.origin == "agentproof"} == SIX_CHECKS
-    assert {c.check_id for c in report.checks if c.origin == "ours"} == {"data_flow"}
+    assert {c.check_id for c in report.checks if c.origin == "ours"} == {"data_flow", "soundness"}
 
 
 def test_email_triage_dead_end_is_one_finding():
