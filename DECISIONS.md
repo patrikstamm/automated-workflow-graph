@@ -156,9 +156,33 @@ Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module
 ## 5. Verification results and repair
 
 - Possible results: **PASS**, **FAIL**, **INCONCLUSIVE**.
-- **INCONCLUSIVE** (a search bound was hit): the workflow is exported **with a warning**. It is reported as **its own category** and is **not** sent to repair.
+- **INCONCLUSIVE**: the workflow is exported **with a warning**. It is reported as **its own category** and is **not** sent to repair. Causes:
+  - a search bound was hit (our checks, Step 5)
+  - an AgentProof order-rule violation whose path goes through an AND-split: AgentProof checks parallel
+    branches as if only one of them runs, so the violation may be a false alarm
 - **FAIL**: the witness trace goes back to the LLM as a repair instruction.
 - **At most 3 repair rounds.** After that the run is recorded as failed.
+- Overall verdict: FAIL if any finding fails, otherwise INCONCLUSIVE if any is inconclusive, otherwise PASS.
+
+### 5.1 Evaluator (`src/verify/`)
+
+- `verify_graph(graph, VerifyConfig)` → `VerificationReport`. Settings are passed **per run**
+  (each benchmark task sets its own); defaults are off:
+  - `require_human`: the workflow must contain a human step
+  - `sensitive_tools`: tool names that need a human step before them (AgentProof's human-gate coverage)
+  - `order_rules`: AgentProof temporal DSL, e.g. `tool:deploy -> F tool:approve`. An invalid rule is a configuration error.
+- `src/verify/baseline/agentproof.py` runs AgentProof's checks unchanged and is the only file in `src/` that
+  imports `agentproof` (enforced by a test). Our own checks go in `src/verify/ours/` (Step 5).
+- The report keeps every check's **raw** output unchanged (`CheckResult.raw`), so results can be reported per origin.
+  **Findings** are our interpretation: one per fault, in the LLM's own node ids, tagged `origin`.
+- Duplicate findings are merged: a step that cannot reach an end step only because it leads into an already
+  reported dead end is listed under that dead end as "also affected". The remaining `reverse_reachability`
+  findings are real endless loops, one finding per connected group of steps.
+- Timings are recorded per check group (`agentproof.structural`, `agentproof.order_rule:<id>`) and summed per origin.
+- `repair_message(format_errors, report)` builds the text for the LLM: format errors and FAIL findings with
+  their paths. INCONCLUSIVE findings are left out.
+- Known AgentProof limit: its static order-rule check does **not** flag an obligation still open when the run
+  ends (`deploy → end` passes `deploy -> F approve`). Our own end-of-run check is added in Step 5 (`origin: ours`).
 
 ## 6. Choosing the best version
 
