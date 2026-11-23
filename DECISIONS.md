@@ -110,14 +110,27 @@ Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module
 ## 2. LLM providers and models
 
 - Exactly two providers: **Claude** and **Gemini**.
-- One thin adapter: `call(provider, system, messages) -> LLMResult`. All provider-specific code stays inside that provider's own file.
-- Both providers get their structured-output schema from the same Pydantic model, and every response is validated against it.
-- Models: **Claude Haiku 5.5** (`claude-haiku-5-5`) and **Gemini 3.5 Flash** (`gemini-3.5-flash`).
+- One thin adapter in `src/llm/`: `call(provider, system, messages, schema=None) -> LLMResult`.
+  All provider-specific code stays inside that provider's own file (`claude.py`, `gemini.py`).
+  `src/providers.py` only re-exports it so older imports keep working.
+- Both providers get the **same** JSON schema, built from the `WorkflowDraft` Pydantic model
+  (`src/llm/schema.py`, with `default`/`title` removed because Gemini does not support them),
+  and every response is validated with `load_draft`.
+  - Claude: `output_config={"format": {"type": "json_schema", "schema": ...}}`
+  - Gemini: `response_json_schema=...` (full JSON Schema; not the older `response_schema`)
+- Models: **Claude Haiku 5.5** (`claude-haiku-5-5`) and **Gemini 3.5 Flash** (`gemini-3.5-flash`),
+  overridable with `CLAUDE_MODEL` / `GEMINI_MODEL` in `.env`. Keys go in `.env` (template: `.env.example`).
+- **Both providers run at their default temperature.** Claude's Messages API (anthropic 2.12) has no
+  temperature setting, so setting Gemini to 0 would make the consistency comparison unfair.
+- Token counts are normalised: `input_tokens` includes cached prompt tokens; `output_tokens` is the visible
+  answer; `thinking_tokens` is counted separately (billed output = output + thinking).
+- Gemini's thinking is left at its default for now; thinking tokens are logged and a limit is decided after the pilot.
 - To keep costs low:
-  - temperature 0 and an output-token cap
-  - record and replay LLM responses during development
+  - an output-token cap (4000)
+  - record and replay LLM answers during development: `LLM_CACHE=off | record | replay`, saved in `.llm_cache/`
   - a spending limit set in each provider's console
-  - prompt caching for the fixed system prompt
+  - prompt caching for the fixed system prompt (not enabled yet; decided after the pilot)
+- A live check (`scripts/smoke_llm.py`) makes one real call per provider to confirm both accept the schema.
 - A **pilot run** (10 tasks × 1 repeat, both models) happens before the full evaluation, to estimate cost.
 
 ## 3. AgentProof
@@ -134,8 +147,8 @@ Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module
 5. **"Best version" = Pareto selection** over accuracy, cost and latency (see section 6).
 6. **Consistency across LLMs**: the same verify + repair pipeline is evaluated on both Claude and Gemini.
 7. **Evaluation conditions**:
-   - **A**: LLM only
-   - **B**: A + verification and repair
+   - **A**: LLM only — exactly one call (`generate_draft`); an answer with format errors counts as a failed task
+   - **B**: A + verification and repair (format-error retries belong here, within the 3 repair rounds)
    - **C**: B + optimisation
 
    All three run on both LLMs.
