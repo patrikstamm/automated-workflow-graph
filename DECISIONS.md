@@ -184,6 +184,31 @@ Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module
 - Known AgentProof limit: its static order-rule check does **not** flag an obligation still open when the run
   ends (`deploy → end` passes `deploy -> F approve`). Our own end-of-run check is added in Step 5 (`origin: ours`).
 
+### 5.2 Repair loop (`src/pipeline.py`)
+
+- `run_condition_a()`: one call (`generate_draft`); format errors or a FAIL verdict make the run FAILED.
+- `run_condition_b()`: the first call, then up to **3 repair rounds**, so **at most 4 LLM calls** per run.
+  Format errors and verification faults share this one budget.
+- Each repair round sends **only the latest draft**: the task, the LLM's previous answer, and the repair
+  message (`repair_draft`). The cost per round stays roughly flat.
+- The loop stops with one of these run statuses:
+
+  | Status | When |
+  |---|---|
+  | `PASS` | a round passes verification |
+  | `INCONCLUSIVE` | a round is inconclusive (exported with a warning, not repaired) |
+  | `FAILED` | still format errors or FAIL after round 3 (condition A: after its one call) |
+  | `NO_PROGRESS` | the LLM returned the same answer as the round before (compared as JSON); counted as a failure |
+  | `BLOCKED` | the provider blocked or refused the request; not retried |
+
+- An answer cut off at the token limit is a format error, and the repair message asks for a shorter workflow.
+- Every round is recorded (tokens, time, stop reason, format errors, report, draft, repair message) in
+  `RunResult`, ready to be stored in SQLite later. `RunResult.totals()` sums tokens, LLM time and verification time.
+- CLI: condition B is the default; `--no-repair` runs condition A. `--require-human` and `--sensitive TOOL`
+  set the verification settings.
+- The Gmail, Sheets and Calendar tools in `src/catalog.py` are enabled as stubs: generation and verification
+  only read their names and parameters; they are not executed until mock tools exist (section 7).
+
 ## 6. Choosing the best version
 
 - Keep the Pareto front over (accuracy ↑, cost ↓, latency ↓).
