@@ -14,7 +14,7 @@ Status = Literal["PASS", "FAIL", "INCONCLUSIVE"]
 
 PARALLEL_NOTE = ("The path goes through parallel branches. AgentProof checks parallel branches as if only one "
                  "of them runs, so this may be a false alarm. Not sent to repair.")
-SEARCH_LIMIT_NOTE = ("A search bound was hit, so soundness is neither proved nor disproved. "
+SEARCH_LIMIT_NOTE = ("A search bound was hit, so the property is neither proved nor disproved. "
                      "Not sent to repair.")
 RUNTIME_ARG_NOTE = ("The conflict depends on an argument known only at run time (a \"$value\"), so it may be "
                     "a false alarm. Not sent to repair.")
@@ -48,6 +48,7 @@ class VerificationReport:
     findings: list[Finding]
     timings_ms: dict[str, float]
     graph_size: dict[str, int]
+    agentproof_verdict: Status = "PASS"   # the verdict from AgentProof's checks alone (suggestion 1)
 
     def ms_by_origin(self) -> dict[str, float]:
         totals: dict[str, float] = defaultdict(float)
@@ -60,20 +61,34 @@ class VerificationReport:
 
 
 def build_report(graph: WorkflowGraph, checks: list[CheckResult], timings_ms: dict[str, float]) -> VerificationReport:
-    findings: list[Finding] = []
-    for check in checks:
-        if check.status != "PASS":
-            findings.extend(_findings_for(graph, check))
-    findings = _merge_into_dead_ends(graph, findings)
+    # Order rules: our exact check decides (DECISIONS.md section 5). AgentProof's result for the same rule
+    # stays in `checks` unchanged, and still counts towards the AgentProof-only verdict.
+    ours_rules = {c.check_id for c in checks if c.origin == "ours" and c.check_id.startswith("order_rule:")}
+    decides = [c for c in checks
+               if not (c.origin == "agentproof" and c.check_id in ours_rules)]
+    findings = _findings(graph, decides)
+    agentproof_findings = _findings(graph, [c for c in checks if c.origin == "agentproof"])
 
-    statuses = {f.status for f in findings}
-    verdict: Status = "FAIL" if "FAIL" in statuses else "INCONCLUSIVE" if "INCONCLUSIVE" in statuses else "PASS"
     size = {
         "nodes": len(graph.nodes),
         "edges": len(graph.edges),
         "gateways": sum(1 for n in graph.nodes if n.kind == "passthrough"),
     }
-    return VerificationReport(verdict, checks, findings, timings_ms, size)
+    return VerificationReport(_verdict(findings), checks, findings, timings_ms, size,
+                              agentproof_verdict=_verdict(agentproof_findings))
+
+
+def _findings(graph: WorkflowGraph, checks: list[CheckResult]) -> list[Finding]:
+    findings: list[Finding] = []
+    for check in checks:
+        if check.status != "PASS":
+            findings.extend(_findings_for(graph, check))
+    return _merge_into_dead_ends(graph, findings)
+
+
+def _verdict(findings: list[Finding]) -> Status:
+    statuses = {f.status for f in findings}
+    return "FAIL" if "FAIL" in statuses else "INCONCLUSIVE" if "INCONCLUSIVE" in statuses else "PASS"
 
 
 # ---------- raw AgentProof output -> findings ----------
@@ -113,6 +128,25 @@ def _findings_for(graph: WorkflowGraph, check: CheckResult) -> list[Finding]:
     if cid == "tool_declarations":
         return [Finding(o, cid, "FAIL", [origin_of(n)], [], f'Tool step "{origin_of(n)}" does not name a tool.')
                 for n in raw["tool_nodes_missing_tools"]]
+
+    if cid.startswith("order_rule:") and o == "ours":
+        findings = []
+        if raw["violated"]:
+            witness = path(raw["witness"])
+            if raw["when"] == "at_end":
+                message = f'The order rule "{raw["dsl"]}" is still not met when the workflow ends on this path.'
+                nodes = []
+            else:
+                message = f'The order rule "{raw["dsl"]}" is broken at step "{witness[-1]}" on this path.'
+                nodes = [witness[-1]]
+            findings.append(Finding(o, cid, "FAIL", nodes, witness, message))
+        if raw["limit"]:
+            limit = raw["limit"]
+            findings.append(Finding(o, cid, "INCONCLUSIVE", [], [],
+                                    f'The check of order rule "{raw["dsl"]}" stopped at its limit '
+                                    f'({limit["bound"]} = {limit["value"]}) after {limit["states"]} states.',
+                                    note=SEARCH_LIMIT_NOTE))
+        return findings
 
     if cid.startswith("order_rule:"):
         violation = raw.get("violation_path") or []

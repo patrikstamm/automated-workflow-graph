@@ -1,13 +1,7 @@
 # Soundness check (our contribution, DECISIONS.md section 5.3):
 # no deadlock and no lack of synchronisation (Vanhatalo, Völzer & Leymann, ICSOC 2007).
 #
-# Token game on the normalized graph. A token sits on an edge.
-#   - entry: puts a token on its outgoing edge
-#   - AND-join: fires when every incoming edge has a token; XOR-join and plain steps: when any has one
-#   - AND-split and plain steps: put a token on every outgoing edge; XOR-split (router, branching human):
-#     on exactly one of them
-#   - end steps (and steps with no outgoing edge, which AgentProof reports) take the token away
-#   The run is finished when no token is left.
+# Token game: see tokens.py (shared with the order-rule check).
 # Faults:
 #   - lack of synchronisation: an edge gets a second token (a step runs twice at the same time)
 #   - deadlock: no step can fire, but tokens are left (an AND-join waits for a branch that never comes)
@@ -24,58 +18,23 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict, deque
-from dataclasses import dataclass
 
 from src.schema import WorkflowGraph
 from src.verify.config import VerifyConfig
+from src.verify.ours.tokens import TokenNet, firing_order
 from src.verify.report import CheckResult
 
 ORIGIN = "ours"
 CHECK_ID = "soundness"
 
 
-@dataclass
-class _Edge:
-    source: str
-    target: str
-    trace: list[str]     # graph nodes inside this (collapsed) edge, in firing order
-
-
-class _Reduced:
+class _Reduced(TokenNet):
     """The normalized graph with collapsed fragments as single edges."""
 
     def __init__(self, graph: WorkflowGraph):
-        self.graph = graph
-        self.edges: dict[int, _Edge] = {}
-        self.outs: dict[str, list[int]] = defaultdict(list)
-        self.ins: dict[str, list[int]] = defaultdict(list)
-        self._next = 0
-        for e in graph.edges:
-            self.add(e.source, e.target, [])
+        super().__init__(graph)
         self.counts = {"sequence": 0, "bond": 0, "loop": 0}
         self.faults: list[dict] = []
-
-    def add(self, source: str, target: str, trace: list[str]) -> int:
-        eid = self._next
-        self._next += 1
-        self.edges[eid] = _Edge(source, target, trace)
-        self.outs[source].append(eid)
-        self.ins[target].append(eid)
-        return eid
-
-    def remove(self, eid: int) -> _Edge:
-        e = self.edges.pop(eid)
-        self.outs[e.source].remove(eid)
-        self.ins[e.target].remove(eid)
-        return e
-
-    def split_logic(self, node_id: str) -> str:
-        gate = self.graph.node(node_id).metadata.gateway
-        return gate.logic if gate is not None and gate.role == "split" else "AND"
-
-    def join_logic(self, node_id: str) -> str:
-        gate = self.graph.node(node_id).metadata.gateway
-        return gate.logic if gate is not None and gate.role == "join" else "XOR"
 
     # ---------- phase 1: reduction rules ----------
 
@@ -193,9 +152,7 @@ class _Reduced:
 
     def search(self, max_states: int, timeout_s: float) -> tuple[int, dict | None]:
         """Breadth-first search over token placements. Returns (states explored, limit hit or None)."""
-        entry = self.graph.entry_id
-        initial = frozenset(self.outs[entry])
-        fired0 = [entry] + [n for eid in self.outs[entry] for n in self.edges[eid].trace]
+        initial, fired0 = self.initial()
         parent: dict[frozenset, tuple[frozenset | None, list[str]]] = {initial: (None, fired0)}
         queue = deque([initial])
         deadline = time.perf_counter() + timeout_s
@@ -206,42 +163,24 @@ class _Reduced:
                 return explored, {"bound": "timeout_s", "value": timeout_s, "states": explored}
             state = queue.popleft()
             explored += 1
-            enabled = False
-            for n in sorted({self.edges[eid].target for eid in state}):
-                for consume in self._consumable(n, state):
-                    enabled = True
-                    for produce in self._producible(n):
-                        rest = state - consume
-                        fired = [n] + [x for eid in produce for x in self.edges[eid].trace]
-                        doubled = next((eid for eid in produce if eid in rest), None)
-                        if doubled is not None:
-                            culprit = self._join_before(self.edges[doubled].source)
-                            self._search_fault("lack_of_sync", culprit,
-                                               self._firing_order(parent, state) + fired)
-                            continue
-                        new = rest | produce
-                        if new not in parent:
-                            parent[new] = (state, fired)
-                            if len(parent) > max_states:
-                                return explored, {"bound": "max_states", "value": max_states,
-                                                  "states": explored}
-                            queue.append(new)
-            if not enabled and state:
+            moves = self.moves(state)
+            for move in moves:
+                rest = state - move.consumed
+                doubled = next((eid for eid in move.produced if eid in rest), None)
+                if doubled is not None:
+                    culprit = self._join_before(self.edges[doubled].source)
+                    self._search_fault("lack_of_sync", culprit, firing_order(parent, state) + move.fired)
+                    continue
+                new = rest | move.produced
+                if new not in parent:
+                    parent[new] = (state, move.fired)
+                    if len(parent) > max_states:
+                        return explored, {"bound": "max_states", "value": max_states, "states": explored}
+                    queue.append(new)
+            if not moves and state:
                 for n in sorted({self.edges[eid].target for eid in state}):
-                    self._search_fault("deadlock", n, self._firing_order(parent, state) + [n])
+                    self._search_fault("deadlock", n, firing_order(parent, state) + [n])
         return explored, None
-
-    def _consumable(self, n: str, state: frozenset) -> list[frozenset]:
-        marked = [eid for eid in self.ins[n] if eid in state]
-        if self.join_logic(n) == "AND":
-            return [frozenset(self.ins[n])] if len(marked) == len(self.ins[n]) else []
-        return [frozenset({eid}) for eid in marked]
-
-    def _producible(self, n: str) -> list[frozenset]:
-        outs = self.outs[n]
-        if self.split_logic(n) == "XOR":
-            return [frozenset({eid}) for eid in outs]
-        return [frozenset(outs)]                           # empty for end steps: the token is taken away
 
     def _join_before(self, node_id: str) -> str:
         """The step that runs twice: walk back from where the second token was put to the nearest join."""
@@ -255,14 +194,6 @@ class _Reduced:
         if not any(f["kind"] == kind and f["node"] == node for f in self.faults):
             self.faults.append({"kind": kind, "node": node, "split": None,
                                 "found_by": "search", "loop": False, "witness": witness})
-
-    @staticmethod
-    def _firing_order(parent: dict, state: frozenset) -> list[str]:
-        parts = []
-        while state is not None:
-            state, fired = parent[state]
-            parts.append(fired)
-        return [n for fired in reversed(parts) for n in fired]
 
 
 def check_soundness(graph: WorkflowGraph, config: VerifyConfig) -> CheckResult:

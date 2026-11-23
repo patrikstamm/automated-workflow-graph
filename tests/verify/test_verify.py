@@ -132,32 +132,41 @@ SEND_AFTER_DRAFT = OrderRule("send_after_draft", "tool:gmail_draft -> F tool:gma
 
 def test_order_rule_violation_fails():
     report = verify(TWO_DRAFTS, order_rules=(SEND_AFTER_DRAFT,))
-    assert report.verdict == "FAIL"
-    [f] = report.findings
-    assert (f.origin, f.check_id, f.status) == ("agentproof", "order_rule:send_after_draft", "FAIL")
-    assert f.witness == ["start", "first", "second"]
-    assert "agentproof.order_rule:send_after_draft" in report.timings_ms
+    assert report.verdict == "FAIL" and report.agentproof_verdict == "FAIL"
+    [f] = report.findings                               # our check decides; AgentProof's is not repeated
+    assert (f.origin, f.check_id, f.status) == ("ours", "order_rule:send_after_draft", "FAIL")
+    assert f.witness == ["start", "first", "second"]    # a second draft before any send
+    assert {"agentproof.order_rule:send_after_draft", "ours.order_rule:send_after_draft"} <= set(report.timings_ms)
+    raw = next(c for c in report.checks if c.origin == "agentproof" and c.check_id.startswith("order_rule"))
+    assert raw.status == "FAIL"                         # AgentProof's own result is kept unchanged
 
 
-def test_order_rule_through_parallel_branch_is_inconclusive():
-    data = json.loads(json.dumps(TWO_DRAFTS))
-    # "first" now starts two parallel branches: "second" and "note".
-    data["nodes"].insert(3, {"id": "note", "kind": "llm", "task": "Take a note"})
-    data["nodes"][3 + 1]["join"] = "all"            # send waits for both branches
-    data["edges"] = [
-        {"source": "start", "target": "first"},
-        {"source": "first", "target": "second"},
-        {"source": "first", "target": "note"},
-        {"source": "second", "target": "send"},
-        {"source": "note", "target": "send"},
-        {"source": "send", "target": "end"},
-    ]
+def test_agentproof_parallel_false_alarm_is_decided_by_our_check():
+    # "send" runs in a parallel branch next to "note", so the second draft always comes after a send.
+    # AgentProof follows the "note" branch as if "send" never ran and reports a violation.
+    def draft(i):
+        return {"id": i, "kind": "tool", "tool": "gmail_draft",
+                "args": [{"name": "to", "value": "a@example.com"}, {"name": "body", "value": i}]}
+
+    def send(i, join=None):
+        node = {"id": i, "kind": "tool", "tool": "gmail_send",
+                "args": [{"name": "to", "value": "a@example.com"}, {"name": "subject", "value": "s"},
+                         {"name": "body", "value": "b"}]}
+        return {**node, "join": join} if join else node
+
+    data = {"name": "draft_send_twice",
+            "nodes": [{"id": "start", "kind": "start"}, draft("first"), send("send"),
+                      {"id": "note", "kind": "llm", "task": "Take a note"},
+                      {**draft("second"), "join": "all"}, send("send_again"), {"id": "end", "kind": "end"}],
+            "edges": [{"source": "start", "target": "first"},
+                      {"source": "first", "target": "send"}, {"source": "first", "target": "note"},
+                      {"source": "send", "target": "second"}, {"source": "note", "target": "second"},
+                      {"source": "second", "target": "send_again"}, {"source": "send_again", "target": "end"}]}
     report = verify(data, order_rules=(SEND_AFTER_DRAFT,))
-    raw = next(c for c in report.checks if c.check_id.startswith("order_rule"))
-    assert raw.status == "FAIL"                      # AgentProof's own result is unchanged
-    [f] = report.findings
-    assert f.status == "INCONCLUSIVE" and "parallel" in f.note
-    assert report.verdict == "INCONCLUSIVE"
+    raw = next(c for c in report.checks if c.origin == "agentproof" and c.check_id.startswith("order_rule"))
+    assert raw.status == "FAIL"                         # AgentProof's own result is unchanged
+    assert report.agentproof_verdict == "INCONCLUSIVE"  # ...and marked as a possible false alarm
+    assert report.verdict == "PASS" and report.findings == []
 
 
 def test_order_rule_that_holds_passes():
@@ -175,7 +184,7 @@ def test_invalid_order_rule_is_a_config_error():
 def test_report_is_json_serialisable_and_timed():
     report = verify(get("email_triage"))
     data = json.loads(json.dumps(report.to_dict()))
-    assert data["verdict"] == "FAIL"
+    assert data["verdict"] == "FAIL" and data["agentproof_verdict"] == "FAIL"
     assert set(data["ms_by_origin"]) == {"agentproof", "ours"}
     assert data["graph_size"] == {"nodes": 7, "edges": 6, "gateways": 0}
     # parallel: start__split, summarise__join and end__join are inserted gateways

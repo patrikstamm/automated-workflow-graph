@@ -135,7 +135,7 @@ def test_b_truncated_answer_is_repaired(llm):
 
 
 def test_b_inconclusive_is_not_repaired(llm):
-    # first --(parallel)--> second, note --> send: the order rule's path crosses an AND-split.
+    # The order-rule search is stopped by its state bound, so the round is INCONCLUSIVE.
     data = {
         "name": "two_drafts",
         "nodes": [
@@ -157,7 +157,8 @@ def test_b_inconclusive_is_not_repaired(llm):
         ],
     }
     fake = llm(data)
-    run = run_b(order_rules=(OrderRule("send_after_draft", "tool:gmail_draft -> F tool:gmail_send"),))
+    run = run_b(order_rules=(OrderRule("send_after_draft", "tool:gmail_draft -> F tool:gmail_send"),),
+                max_states=1)
     assert (run.status, len(fake.requests)) == ("INCONCLUSIVE", 1)
 
 
