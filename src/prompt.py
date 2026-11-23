@@ -6,28 +6,40 @@ from src.humanprompt import UserRequest
 ROLE = """You design workflows for office tasks.
 A workflow is a graph: nodes are steps, edges say which step runs next."""
  
+# The draft format is defined in src/schema/draft.py (DECISIONS.md section 1.2).
+# These rules explain it to the LLM; the answer is also forced to match the JSON schema.
 FORMAT_RULES = """Answer with ONLY a JSON object, no explanation, in this format:
-{
-  "name": "short_snake_case_name",
-  "nodes": [
-    {"id": "...", "kind": "start" | "end" | "agent" | "tool",
-     "tool": "<tool name, only for kind=tool>",
-     "task": "<what to do, only for kind=agent>",
-     "args": {"<parameter name>": "<value>"},
-     "reads": ["<state values this step uses>"],
-     "writes": ["<state values this step produces>"]}
-  ],
-  "edges": [{"from": "<node id>", "to": "<node id>"}]
-}
- 
-Rules:
-- Exactly one node with kind "start" and at least one with kind "end".
-- Use "tool" nodes only with tools from the list above.
-- Every "tool" node needs "args" with a value for each of the tool's parameters.
-  To use a value an earlier step wrote, write "$" + its name, e.g. "$summary".
-- Use "agent" nodes for thinking steps (extracting, summarising, deciding).
-- A step may only read values that an earlier step writes."""
- 
+{"name": "short_snake_case_name", "nodes": [...], "edges": [{"source": "<node id>", "target": "<node id>"}]}
+
+Node kinds:
+- "start": exactly one; where the workflow begins. No incoming edges.
+- "end": at least one; where the workflow finishes. No outgoing edges.
+- "llm": a thinking step (extract, summarise, decide what to write). Needs "task".
+- "tool": calls one tool from the list above. Needs "tool" and "args".
+- "human": a person checks or approves something. Needs "task".
+- "router": chooses ONE of its outgoing edges based on earlier results.
+
+Node fields:
+- "id", and the names in "reads" and "writes", are snake_case: lowercase letters, digits, single underscores.
+- "reads": state values the step uses. "writes": state values the step produces.
+- Only "tool" nodes have "tool" and "args".
+
+Tool arguments:
+- "args" is a list with one {"name": ..., "value": ...} for EVERY parameter of the tool, and no others.
+- Every value is a string. To use a state value, the value is exactly "$" + its name, e.g. "$summary",
+  and that name must also be in the node's "reads".
+- A list parameter is written as a JSON string, e.g. "[\\"a@example.com\\", \\"b@example.com\\"]".
+
+Edges:
+- A "router" has 2 or more outgoing edges, each with a different "condition", e.g. "urgent" and "normal".
+- A "human" with 2 or more outgoing edges also needs a different "condition" on each, e.g. "approved" and "rejected".
+- Any other node with 2 or more outgoing edges runs all of them at the same time; those edges have no condition.
+- A node with 2 or more incoming edges must set "join": "all" to wait for every incoming branch,
+  or "any" to continue as soon as one arrives. Nodes with one incoming edge have no "join".
+
+Data:
+- A step may only read values that are written before it on EVERY path that reaches it."""
+
 EXAMPLE_REQUEST = "Echo the word hello."
 
 EXAMPLE_WORKFLOW = """{
@@ -35,13 +47,13 @@ EXAMPLE_WORKFLOW = """{
   "nodes": [
     {"id": "start", "kind": "start"},
     {"id": "echo", "kind": "tool", "tool": "test_tool",
-     "args": {"text": "hello"},
+     "args": [{"name": "text", "value": "hello"}],
      "reads": [], "writes": ["echoed"]},
     {"id": "end", "kind": "end"}
   ],
   "edges": [
-    {"from": "start", "to": "echo"},
-    {"from": "echo", "to": "end"}
+    {"source": "start", "target": "echo"},
+    {"source": "echo", "target": "end"}
   ]
 }"""
  
