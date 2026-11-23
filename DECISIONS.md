@@ -15,15 +15,82 @@ Last updated: 2026-11-23.
 
 ## 1. Graph format
 
-- Our workflow format is a **superset of AgentProof's dict format** (`agentproof.graph.model.graph_from_dict`).
-- On top of it, each node carries `metadata` with:
-  - gateway logic: `split` or `join`, and `AND` / `XOR` / `OR`
-  - `reads` and `writes` (state values)
-  - `args` (tool parameters; `"$name"` refers to a state value)
-- The format is defined once, as a Pydantic model (`WorkflowGraph`). It is the contract between all three modules.
-- A **normalize** step inserts explicit gateway nodes wherever a node has more than one edge in or out, so the graph meets Vanhatalo et al.'s workflow-graph rules.
-- Mapping to AgentProof: XOR-splits become `router` nodes with `conditional` edges; AND gateways become `passthrough` nodes with `parallel` edges.
-- Witness traces must be mapped back to the LLM's own node ids before they go into a repair prompt.
+Status: **agreed.**
+
+### 1.1 Two layers
+
+| Layer | Written by | Purpose |
+|---|---|---|
+| **Draft** (`WorkflowDraft`) | the LLM | Simple and flat; no gateway nodes. Same Pydantic model for Claude and Gemini. |
+| **Normalized** (`WorkflowGraph`) | our code (`normalize`) | Explicit gateways and edge kinds; a superset of AgentProof's dict format (`agentproof.graph.model.graph_from_dict`). All checks and the improver work on this layer. |
+
+### 1.2 Draft (what the LLM writes)
+
+- Node kinds: `start`, `end`, `llm`, `tool`, `human`, `router`.
+- Node fields: `id`, `kind`, `task` (llm/human), `tool` + `args` (tool), `reads`, `writes`, `join`.
+- `args` is a list of `{name, value}` pairs. **Values are always strings.** `"$x"` refers to state value `x`;
+  list parameters are written as a JSON string (e.g. `"[\"a@x.com\"]"`) and checked against the tool's type.
+- Branching:
+  - `router` or `human` with several outgoing edges, each with a `condition` → choose one branch (XOR-split).
+  - Any other node with several outgoing edges, no conditions → run all branches (AND-split).
+- Merging: a node with several incoming edges must set `join`:
+  - `"all"` → wait for every branch (AND-join)
+  - `"any"` → continue with whichever branch arrives (XOR-join)
+- The LLM never writes OR-joins (only our completion step creates them) and never marks loops (our code finds them).
+
+### 1.3 Format checks (on parsing)
+
+A failure is a **format error** and goes back to the LLM. It is not a verification FAIL.
+
+- Unique snake_case ids; every edge points to existing nodes.
+- Exactly one `start` (no incoming edges); at least one `end` (no outgoing edges).
+- `tool` nodes: tool exists in the catalog; `args` names match its parameters exactly; literal values parse as the parameter type.
+- `llm` and `human` nodes have a non-empty `task`.
+- A `router` has ≥ 2 outgoing edges, each with a unique condition. A branching `human` follows the same rule. No other edges have conditions.
+- `join` is set if and only if the node has more than one incoming edge.
+- Every `"$x"` in `args` appears in the node's `reads`.
+
+Not checked here: reachability, dead ends, router shape, human gates (AgentProof), and
+written-before-read (our data-flow check).
+
+### 1.4 Normalized graph
+
+- A node that starts several parallel branches gets a `<id>__split` gateway after it (AND).
+- A node with several incoming edges gets a `<id>__join` gateway before it (AND for `"all"`, XOR for `"any"`).
+- `router` and branching `human` nodes are XOR-splits themselves; no extra node.
+- `start` has exactly one outgoing edge (Vanhatalo); if not, a split gateway is added.
+- Node `metadata`: `origin_id` (draft id, used to map witness traces back for repair), `task`, `args`,
+  `reads`, `writes`, and `gateway: {role: split|join, logic: AND|XOR|OR}` on gateway nodes.
+- Edge kinds: `conditional` (out of router/branching human), `parallel` (out of an AND-split), `direct` otherwise.
+  Loop edges keep their kind and get `loop: true` in edge metadata (AgentProof requires every edge out of
+  a router to be `conditional`).
+
+### 1.5 Conversion to AgentProof
+
+| Ours | AgentProof |
+|---|---|
+| `start` / `end` | `entry` / `exit` (entry and exit ids derived automatically) |
+| `llm`, `human`, `router` | same kinds |
+| `tool` | `tool`, with `tools=(tool_name,)` |
+| AND gateway / XOR gateway | `passthrough` / `router` |
+
+AgentProof's `graph_from_dict` keeps node metadata but drops edge metadata, so `loop` exists only in our format.
+
+### 1.6 Test graphs
+
+1. Linear echo — passes everything.
+2. AgentProof paper's email triage with a dead end — format OK; AgentProof `dead_ends` fails with a witness trace.
+3. Parallel fetch + AND-join — correct split and join inserted.
+4. Draft → review (router) → revise → back to draft — loop detected, edge stays `conditional`.
+5. Human approve/reject — human acts as an XOR-split.
+6. Vanhatalo's multiple-ends example (slide G0) — 3 exits kept for later completion.
+7. Eight malformed drafts — each gives its specific format error.
+
+### 1.7 Files
+
+New code lives in `src/schema/`: `draft.py`, `graph.py`, `normalize.py`, `to_agentproof.py`;
+tests in `tests/schema/`; pytest in `requirements-dev.txt`.
+Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module and is reviewed by its owner.
 
 ## 2. LLM providers and models
 
@@ -41,11 +108,11 @@ Last updated: 2026-11-23.
 ## 3. AgentProof
 
 - Used as the installed package `agentproofx` (pinned in `requirements.txt`). **Never copy its code into this repo.**
-- Only `verify/baseline/` may import it.
+- Only `src/verify/baseline/` may import it.
 
 ## 4. Professor's suggestions
 
-1. **Separate our contribution from AgentProof's six checks**, in the code (`verify/baseline/` vs `verify/ours/`) and in reported results. Every finding carries `origin: agentproof | ours`.
+1. **Separate our contribution from AgentProof's six checks**, in the code (`src/verify/baseline/` vs `src/verify/ours/`) and in reported results. Every finding carries `origin: agentproof | ours`.
 2. **Bound the state-space search** (state limit, loop bound, timeout). If a bound is hit, the result is **INCONCLUSIVE, never PASS**. Report verification time as graph size grows. Use the RPST block tree to skip the search where possible: sequence blocks, simple branch blocks and loop blocks are decided by pattern, so only rigid blocks need a search, each on its own subgraph.
 3. **Bernstein's conditions also cover tool side effects**: catalog resources (e.g. `gmail:inbox`) as well as state values. When a resource name depends on an argument known only at run time, assume a conflict.
 4. **Measure real execution**: time, tokens and task accuracy per node and per run. Fewer nodes does not mean faster.
@@ -94,10 +161,10 @@ Last updated: 2026-11-23.
 
 | Module | Folders |
 |---|---|
-| prompt-to-LLM | `llm/`, `generation/`, `cli/` |
-| evaluator | `verify/baseline/`, `verify/ours/`, `verify/report.py`, repair-message formatting |
-| improver | `refactor/`, `runtime/` (LangGraph export, executor), `store/` (SQLite, Pareto) |
-| shared | `schema/` (graph format), `eval/` (tasks, mocks, oracles, runner) |
+| prompt-to-LLM | `src/llm/`, `src/generation/`, `src/cli/` |
+| evaluator | `src/verify/baseline/`, `src/verify/ours/`, `src/verify/report.py`, repair-message formatting |
+| improver | `src/refactor/`, `src/runtime/` (LangGraph export, executor), `src/store/` (SQLite, Pareto) |
+| shared | `src/schema/` (graph format), `eval/` (tasks, mocks, oracles, runner) |
 
 ## 10. Branches
 
