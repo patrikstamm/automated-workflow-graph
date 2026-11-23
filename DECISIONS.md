@@ -9,9 +9,9 @@ Last updated: 2026-11-23.
 |---|---|
 | Final deadline | TBD |
 | Checkpoints | TBD |
-| Owner: prompt-to-LLM | TBD |
-| Owner: evaluator | Okkaushik |
-| Owner: improver | TBD |
+| Owner: prompt-to-LLM | patrick |
+| Owner: evaluator | om |
+| Owner: improver | march |
 
 ## 1. Graph format
 
@@ -43,7 +43,7 @@ Last updated: 2026-11-23.
 - Used as the installed package `agentproofx` (pinned in `requirements.txt`). **Never copy its code into this repo.**
 - Only `verify/baseline/` may import it.
 
-## 4. Professor's requirements
+## 4. Professor's suggestions
 
 1. **Separate our contribution from AgentProof's six checks**, in the code (`verify/baseline/` vs `verify/ours/`) and in reported results. Every finding carries `origin: agentproof | ours`.
 2. **Bound the state-space search** (state limit, loop bound, timeout). If a bound is hit, the result is **INCONCLUSIVE, never PASS**. Report verification time as graph size grows. Use the RPST block tree to skip the search where possible: sequence blocks, simple branch blocks and loop blocks are decided by pattern, so only rigid blocks need a search, each on its own subgraph.
@@ -99,11 +99,9 @@ Last updated: 2026-11-23.
 | improver | `refactor/`, `runtime/` (LangGraph export, executor), `store/` (SQLite, Pareto) |
 | shared | `schema/` (graph format), `eval/` (tasks, mocks, oracles, runner) |
 
-## 10. Branches and commits
+## 10. Branches
 
 - `main`: always working and demo-ready.
 - `plan`: integration branch for building the full plan, created from `main`.
 - Feature branches: short-lived, created from `plan` (e.g. `eval/dataflow-check`) and merged back once tested.
 - `plan` is merged into `main` at each milestone.
-- Commits are made under each team member's own git identity. **No AI attribution lines** in commit messages or PR descriptions.
-- Never commit `.env` (it is in `.gitignore` and `.dockerignore`).
