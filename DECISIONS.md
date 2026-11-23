@@ -164,13 +164,17 @@ Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module
 
 - Possible results: **PASS**, **FAIL**, **INCONCLUSIVE**.
 - **INCONCLUSIVE**: the workflow is exported **with a warning**. It is reported as **its own category** and is **not** sent to repair. Causes:
-  - a search bound was hit (our soundness check: `max_states` or `timeout_s`)
+  - a search bound was hit (our soundness or order-rule check: `max_states` or `timeout_s`)
   - a parallel conflict that exists only through an argument known at run time (e.g. `"$sheet"` against `"Budget"`)
-  - an AgentProof order-rule violation whose path goes through an AND-split: AgentProof checks parallel
-    branches as if only one of them runs, so the violation may be a false alarm
 - **FAIL**: the witness trace goes back to the LLM as a repair instruction.
 - **At most 3 repair rounds.** After that the run is recorded as failed.
 - Overall verdict: FAIL if any finding fails, otherwise INCONCLUSIVE if any is inconclusive, otherwise PASS.
+- **Order rules: our exact check decides** (section 5.3). AgentProof's result for the same rule stays in the
+  raw data unchanged, but gives no finding and does not count towards the verdict or repair.
+- The report also records **`agentproof_verdict`**: the verdict from AgentProof's checks alone, with AgentProof's
+  own order-rule results (suggestion 1). There, an AgentProof order-rule violation whose path goes through an
+  AND-split is INCONCLUSIVE: AgentProof checks parallel branches as if only one of them runs, so it may be a
+  false alarm.
 
 ### 5.1 Evaluator (`src/verify/`)
 
@@ -186,11 +190,12 @@ Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module
 - Duplicate findings are merged: a step that cannot reach an end step only because it leads into an already
   reported dead end is listed under that dead end as "also affected". The remaining `reverse_reachability`
   findings are real endless loops, one finding per connected group of steps.
-- Timings are recorded per check group (`agentproof.structural`, `agentproof.order_rule:<id>`) and summed per origin.
+- Timings are recorded per check group (`agentproof.structural`, `agentproof.order_rule:<id>`, `ours.<check_id>`,
+  `ours.order_rule:<id>`) and summed per origin.
 - `repair_message(format_errors, report)` builds the text for the LLM: format errors and FAIL findings with
   their paths. INCONCLUSIVE findings are left out.
 - Known AgentProof limit: its static order-rule check does **not** flag an obligation still open when the run
-  ends (`deploy → end` passes `deploy -> F approve`). Our own end-of-run check is added in Step 5 (`origin: ours`).
+  ends (`deploy → end` passes `deploy -> F approve`). Our exact order-rule check covers this (section 5.3).
 
 ### 5.2 Repair loop (`src/pipeline.py`)
 
@@ -267,6 +272,26 @@ Bernstein's conditions (Bernstein 1966): neither writes what the other reads or 
   down to the second.
 - `bernstein.py` (`effects`, `conflicts`) and `parallel_pairs()` are shared with the improver (Step 7), so
   verification and refactoring use the same rule.
+
+**Exact order rules (`order_rules.py`)**: the same rules as `VerifyConfig.order_rules`, checked exactly.
+- **Same rule language and automata as AgentProof** (`G !a`, `a -> F b`, `a -> F[<=k] b`, chains `a -> F b -> F c`,
+  `a U b`, `(x) AND (y)`, `(x) OR (y)`; atoms `tool:<name>`, `action:<kind>`, `decision:<x>` and the tags `tool`,
+  `llm_step`, `human`, `router`). A task writes its rules once and both checkers run them. We parse the rules
+  ourselves (section 3). As in AgentProof, `a -> F b` also fails if a second `a` comes before `b`.
+- **Finished runs**: a run is finished when no token is left (the token game of the soundness check, shared in
+  `tokens.py`). A rule still waiting at that point is a violation. Only finished runs are checked; a loop that
+  can never be left is AgentProof's livelock finding.
+- **Parallel branches** run in every interleaving, on the full graph (not the collapsed one: order matters).
+- Same bounds as soundness (`max_states`, `timeout_s`); hitting one gives an INCONCLUSIVE finding (not repaired).
+- **Differences from AgentProof, on purpose:**
+  - Only the LLM's own steps (`llm`, `tool`, `human`, `router`) are events. Start, end and the inserted
+    gateways are not, so they do not count towards `k` in `F[<=k]`. **Comparison limit:** on our normalized graph,
+    AgentProof counts the gateways (and start/end) as steps, so its `k` is off and `action:entry` matches for it.
+  - `decision:<x>` matches a router or human step that takes the branch with condition `x`. In AgentProof's
+    static check it never matches, so a rule using it always passes there.
+  - `a U (b U c)` is checked as written. AgentProof reads `(b U c)` as a single atom that never matches.
+- One finding per rule: the shortest violating run, as the steps in firing order up to the step that breaks the
+  rule, or up to the end step for a rule still open when the run ends.
 
 ## 6. Choosing the best version
 
