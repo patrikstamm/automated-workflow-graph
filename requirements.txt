@@ -1,13 +1,17 @@
-langgraph
-langchain-core
-langchain-google-genai
-requests
-beautifulsoup4
-google-api-python-client
-google-auth
-google-auth-httplib2
-google-auth-oauthlib
-google-genai
-anthropic
-pydantic
-python-dotenv
+# Pinned to the versions resolved on 2026-11-23 so every teammate and the
+# Docker image get the same behaviour. Bump deliberately, not by accident.
+langgraph==1.2.24
+langchain-core==1.8.4
+langchain-google-genai==4.5.2
+# Google API packages: kept for the Step 6 script that times real Gmail/Sheets/Calendar calls
+google-api-python-client==2.202.0
+google-auth==2.63.1
+google-auth-httplib2==0.4.4
+google-auth-oauthlib==1.5.0
+google-genai==3.6.1
+anthropic==2.12.0
+pydantic==2.14.4
+python-dotenv==1.2.4
+
+# Static verification of workflow graphs (AgentProof, MIT licence)
+agentproofx==0.3.1

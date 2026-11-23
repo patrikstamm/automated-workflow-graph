@@ -35,8 +35,8 @@ EXAMPLE_WORKFLOW = """{
   "nodes": [
     {"id": "start", "kind": "start"},
     {"id": "echo", "kind": "tool", "tool": "test_tool",
+     "args": {"text": "hello"},
      "reads": [], "writes": ["echoed"]},
-     "args": {"text": "hello"}},
     {"id": "end", "kind": "end"}
   ],
   "edges": [

@@ -16,7 +16,8 @@ class LLMResult:
     input_tokens: int
     output_tokens: int
     seconds: float
-    stop_reason: str 
+    stop_reason: str   # the provider's own reason, as text, e.g. "STOP" or "MAX_TOKENS"
+    truncated: bool = False   # True when the output hit the token limit (provider-neutral flag)
 
 def call_gemini(system: str, messages: list[dict]) -> LLMResult:
     from google import genai
@@ -44,13 +45,23 @@ def call_gemini(system: str, messages: list[dict]) -> LLMResult:
         ),
     )
     seconds = time.perf_counter() - start
- 
+
+    # usage_metadata and candidates can both be missing, e.g. when the prompt is blocked.
+    usage = r.usage_metadata
+    if r.candidates:
+        reason = r.candidates[0].finish_reason
+        stop_reason = getattr(reason, "name", str(reason)) if reason is not None else "UNKNOWN"
+    else:
+        block = r.prompt_feedback.block_reason if r.prompt_feedback else None
+        stop_reason = f"BLOCKED: {getattr(block, 'name', block)}" if block is not None else "NO_CANDIDATES"
+
     return LLMResult(
         text=r.text or "",
-        input_tokens=r.usage_metadata.prompt_token_count or 0,
-        output_tokens=r.usage_metadata.candidates_token_count or 0,
+        input_tokens=(usage.prompt_token_count or 0) if usage else 0,
+        output_tokens=(usage.candidates_token_count or 0) if usage else 0,
         seconds=seconds,
-        stop_reason=str(r.candidates[0].finish_reason),
+        stop_reason=stop_reason,
+        truncated=stop_reason == "MAX_TOKENS",
     )
 #def call_claude(system: str, messages: list[dict]) -> LLMResult:
 

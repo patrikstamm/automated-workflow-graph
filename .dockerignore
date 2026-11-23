@@ -1,0 +1,11 @@
+# Keep secrets and local clutter out of the image.
+# docker-compose still passes .env in at runtime through env_file.
+.env
+.git
+.gitignore
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.sqlite
+*.db
