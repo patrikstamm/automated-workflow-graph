@@ -1,6 +1,6 @@
-# One generation call: user request -> LLM -> parsed and format-checked WorkflowDraft.
-# This is evaluation condition A ("LLM only"): exactly one call, no retries (DECISIONS.md section 4).
-# Repair rounds for format errors and verification faults belong to condition B.
+# One LLM call: user request -> LLM -> parsed and format-checked WorkflowDraft.
+# generate_draft is the first call of every run (and all of condition A);
+# repair_draft is one repair round of condition B. The loop itself is in src/pipeline.py.
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -29,6 +29,25 @@ def generate_draft(request: UserRequest, provider: str,
                    catalog: dict[str, ToolSpec] | None = None) -> GenerationResult:
     system = build_system_prompt(request)
     messages = [{"role": "user", "content": build_user_message(request)}]
+    return _send(provider, system, messages, catalog)
+
+
+def repair_draft(request: UserRequest, provider: str, previous_answer: str, repair_text: str,
+                 catalog: dict[str, ToolSpec] | None = None) -> GenerationResult:
+    """One repair round (condition B). Only the latest draft is sent back (DECISIONS.md section 5.2):
+    the task, the LLM's previous answer, and the repair message."""
+    system = build_system_prompt(request)
+    messages = [
+        {"role": "user", "content": build_user_message(request)},
+        # Both providers reject an empty assistant message.
+        {"role": "assistant", "content": previous_answer.strip() or "(no answer)"},
+        {"role": "user", "content": repair_text},
+    ]
+    return _send(provider, system, messages, catalog)
+
+
+def _send(provider: str, system: str, messages: list[dict],
+          catalog: dict[str, ToolSpec] | None) -> GenerationResult:
     result = call(provider, system, messages, schema=draft_schema())
 
     if result.blocked:
@@ -38,5 +57,5 @@ def generate_draft(request: UserRequest, provider: str,
     draft, errors = load_draft(result.text, catalog if catalog is not None else specs_from_tools(TOOLS))
     if result.truncated:
         # Say why the JSON is broken, so the cause is visible in logs and repair prompts.
-        errors = [FormatError("truncated", "The answer was cut off at the token limit.")] + errors
+        errors = [FormatError("truncated", "The answer was cut off at the token limit. Return a shorter workflow.")] + errors
     return GenerationResult(draft, errors, result, system, messages)
