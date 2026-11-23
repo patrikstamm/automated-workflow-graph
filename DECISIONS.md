@@ -1,7 +1,7 @@
 # Project Decisions
 
 Decisions the team has agreed on. Change this file through a reviewed commit, not silently.
-Last updated: 2026-11-23.
+Last updated: 2026-11-24.
 
 ## Open items
 
@@ -39,55 +39,72 @@ Last updated: 2026-11-23.
 ### 1.3 Format checks (on parsing)
 
 A failure is a **format error** and goes back to the LLM. It is not a verification FAIL.
+All errors are returned at once, so one repair round can fix them together.
 
-- Unique snake_case ids; every edge points to existing nodes.
+- The response is valid JSON and matches the draft model (no unknown fields).
+- Unique snake_case ids without double underscores (so they never clash with our `__split`/`__join` names).
+- Every edge points to existing nodes; no edge appears twice.
 - Exactly one `start` (no incoming edges); at least one `end` (no outgoing edges).
-- `tool` nodes: tool exists in the catalog; `args` names match its parameters exactly; literal values parse as the parameter type.
+- `tool` nodes: `tool` is set and exists in the catalog; `args` names match its parameters exactly; literal values parse as the parameter type.
+- Only `tool` nodes may have `tool` and `args`.
 - `llm` and `human` nodes have a non-empty `task`.
 - A `router` has ≥ 2 outgoing edges, each with a unique condition. A branching `human` follows the same rule. No other edges have conditions.
 - `join` is set if and only if the node has more than one incoming edge.
-- Every `"$x"` in `args` appears in the node's `reads`.
+- `reads` and `writes` names are snake_case.
+- Every `"$x"` in `args` appears in the node's `reads`. A value is a reference only when it is exactly `"$name"`; text such as `"costs $5"` is a literal.
 
 Not checked here: reachability, dead ends, router shape, human gates (AgentProof), and
 written-before-read (our data-flow check).
 
 ### 1.4 Normalized graph
 
+- Node kinds use AgentProof's names: `entry`, `exit`, `llm`, `tool`, `human`, `router`, `passthrough`.
 - A node that starts several parallel branches gets a `<id>__split` gateway after it (AND).
 - A node with several incoming edges gets a `<id>__join` gateway before it (AND for `"all"`, XOR for `"any"`).
+- Every inserted gateway has kind `passthrough`; its logic is in metadata.
 - `router` and branching `human` nodes are XOR-splits themselves; no extra node.
 - `start` has exactly one outgoing edge (Vanhatalo); if not, a split gateway is added.
 - Node `metadata`: `origin_id` (draft id, used to map witness traces back for repair), `task`, `args`,
-  `reads`, `writes`, and `gateway: {role: split|join, logic: AND|XOR|OR}` on gateway nodes.
+  `reads`, `writes`, and `gateway: {role: split|join, logic: AND|XOR|OR}` on inserted gateways and on
+  branching `router`/`human` nodes.
 - Edge kinds: `conditional` (out of router/branching human), `parallel` (out of an AND-split), `direct` otherwise.
   Loop edges keep their kind and get `loop: true` in edge metadata (AgentProof requires every edge out of
   a router to be `conditional`).
 
 ### 1.5 Conversion to AgentProof
 
-| Ours | AgentProof |
+| Draft | Normalized graph / AgentProof |
 |---|---|
 | `start` / `end` | `entry` / `exit` (entry and exit ids derived automatically) |
 | `llm`, `human`, `router` | same kinds |
-| `tool` | `tool`, with `tools=(tool_name,)` |
-| AND gateway / XOR gateway | `passthrough` / `router` |
+| `tool` | `tool`, with `tools=[tool_name]` |
+| AND or XOR gateway (inserted by `normalize`) | `passthrough` |
 
-AgentProof's `graph_from_dict` keeps node metadata but drops edge metadata, so `loop` exists only in our format.
+- Gateways are never mapped to `router`: AgentProof requires every edge out of a `router` to be
+  `conditional`, and a join gateway has one plain outgoing edge.
+- `to_agentproof_dict()` returns a plain dict and does not import AgentProof (section 3). The evaluator
+  turns it into an `AgentGraph` with `graph_from_dict()`.
+- AgentProof's `graph_from_dict` keeps node metadata but drops edge metadata, so `loop` exists only in our format.
+- A dead end is reported by two AgentProof checks: `dead_ends`, and `reverse_reachability` (the dead end
+  and every step that leads only to it). The evaluator merges these so the LLM gets each fault once.
 
 ### 1.6 Test graphs
 
 1. Linear echo — passes everything.
-2. AgentProof paper's email triage with a dead end — format OK; AgentProof `dead_ends` fails with a witness trace.
+2. AgentProof paper's email triage with a dead end — format OK; AgentProof `dead_ends` and
+   `reverse_reachability` fail; the witness maps back to `start → classify → router → normal_handler → draft_response`.
 3. Parallel fetch + AND-join — correct split and join inserted.
-4. Draft → review (router) → revise → back to draft — loop detected, edge stays `conditional`.
+4. Write draft → review (router) → back to write draft — loop detected, edge stays `conditional`.
 5. Human approve/reject — human acts as an XOR-split.
 6. Vanhatalo's multiple-ends example (slide G0) — 3 exits kept for later completion.
-7. Eight malformed drafts — each gives its specific format error.
+7. 22 malformed drafts, one per format error type — each gives its specific error.
 
 ### 1.7 Files
 
 New code lives in `src/schema/`: `draft.py`, `graph.py`, `normalize.py`, `to_agentproof.py`;
-tests in `tests/schema/`; pytest in `requirements-dev.txt`.
+tests in `tests/schema/`; pytest in `requirements-dev.txt`. Run the tests with:
+`docker run --rm awg-test sh -c "pip install -q -r requirements-dev.txt && python -m pytest tests -q"`
+(after `docker build -t awg-test .`).
 Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module and is reviewed by its owner.
 
 ## 2. LLM providers and models
