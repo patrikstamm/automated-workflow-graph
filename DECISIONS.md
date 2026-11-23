@@ -165,6 +165,7 @@ Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module
 - Possible results: **PASS**, **FAIL**, **INCONCLUSIVE**.
 - **INCONCLUSIVE**: the workflow is exported **with a warning**. It is reported as **its own category** and is **not** sent to repair. Causes:
   - a search bound was hit (our soundness check: `max_states` or `timeout_s`)
+  - a parallel conflict that exists only through an argument known at run time (e.g. `"$sheet"` against `"Budget"`)
   - an AgentProof order-rule violation whose path goes through an AND-split: AgentProof checks parallel
     branches as if only one of them runs, so the violation may be a false alarm
 - **FAIL**: the witness trace goes back to the LLM as a repair instruction.
@@ -246,6 +247,26 @@ Built in five sub-steps: 5.1 data flow, 5.2 soundness, 5.3 parallel conflicts, 5
   size of the searched part and the number of states, for the scalability benchmark (5.5).
 - The witness is the firing order up to the faulty step, in the LLM's node ids. A step with no outgoing edge
   takes the token away like an end step, so dead ends are reported only by AgentProof.
+
+**Parallel conflicts (`parallel.py`, rules in `bernstein.py`)**: steps that run at the same time must satisfy
+Bernstein's conditions (Bernstein 1966): neither writes what the other reads or writes. Read/read is fine.
+- **Which steps are parallel** (structural rule): different branches of the same AND-split reach them, and
+  neither can reach the other. Loop edges are left out, so a loop around a parallel block does not hide it.
+  Exact for sound graphs; on a graph that fails soundness the result is best effort.
+- **State values**: from each step's `reads`/`writes`. A step that reads a value written in a parallel branch
+  is reported by data flow when the value is not written before the split; this check reports it only when
+  the value **is** written before (the parallel branch overwrites it). Each fault reaches the LLM once.
+- **Tool resources** (section 4, suggestion 3): from `RESOURCES` in `src/catalog.py`, e.g. `gmail_label` writes
+  `gmail:inbox`, `gmail_search` reads it. `{sheet}` is filled in from the step's argument.
+  **Strict Bernstein**: two parallel writes to an append-only resource (two `gmail_send`, two `sheets_append` to
+  the same sheet, two `calendar_create`) are a conflict too, because their order is unpredictable.
+  Tools not in `RESOURCES` have no resource effects.
+- An argument known only at run time (`"$sheet"`) matches any name. Such a conflict is **INCONCLUSIVE**
+  (exported with a warning, not repaired); the improver still treats it as a conflict and does not parallelise.
+- One finding per pair of steps; the path goes from the start to the split, down to the first step, then
+  down to the second.
+- `bernstein.py` (`effects`, `conflicts`) and `parallel_pairs()` are shared with the improver (Step 7), so
+  verification and refactoring use the same rule.
 
 ## 6. Choosing the best version
 
