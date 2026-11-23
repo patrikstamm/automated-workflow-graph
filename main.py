@@ -38,6 +38,8 @@ def parse_args():
                         help="the workflow must contain a human step")
     parser.add_argument("--sensitive", action="append", default=[], metavar="TOOL",
                         help="a tool that needs a human approval step before it (repeatable)")
+    parser.add_argument("--input", action="append", default=[], metavar="VALUE",
+                        help="a value available at the start, e.g. 'email' (repeatable)")
     return parser.parse_args()
 
 
@@ -74,7 +76,8 @@ def print_run(run):
 def main():
     args = parse_args()
     repair = not args.no_repair
-    config = VerifyConfig(require_human=args.require_human, sensitive_tools=frozenset(args.sensitive))
+    config = VerifyConfig(require_human=args.require_human, sensitive_tools=frozenset(args.sensitive),
+                          inputs=frozenset(args.input))
     show_banner(args.provider, repair)
 
     while True:

@@ -15,3 +15,4 @@ class VerifyConfig:
     require_human: bool = False                            # the workflow must contain a human step
     sensitive_tools: frozenset[str] = field(default_factory=frozenset)  # tool names that need a human step before them
     order_rules: tuple[OrderRule, ...] = ()
+    inputs: frozenset[str] = field(default_factory=frozenset)  # values available at the start (e.g. "email")

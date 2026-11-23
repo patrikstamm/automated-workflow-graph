@@ -13,6 +13,7 @@ LABELS = {
     "human_presence": "Missing human step",
     "human_gate_coverage": "Missing human approval",
     "tool_declarations": "Tool not named",
+    "data_flow": "Value read before it is written",
 }
 
 

@@ -30,8 +30,8 @@ def test_clean_examples_pass(name):
     report = verify(get(name))
     assert report.verdict == "PASS"
     assert report.findings == []
-    assert {c.check_id for c in report.checks} == SIX_CHECKS
-    assert all(c.origin == "agentproof" for c in report.checks)
+    assert {c.check_id for c in report.checks if c.origin == "agentproof"} == SIX_CHECKS
+    assert {c.check_id for c in report.checks if c.origin == "ours"} == {"data_flow"}
 
 
 def test_email_triage_dead_end_is_one_finding():
@@ -176,7 +176,7 @@ def test_report_is_json_serialisable_and_timed():
     report = verify(get("email_triage"))
     data = json.loads(json.dumps(report.to_dict()))
     assert data["verdict"] == "FAIL"
-    assert set(data["ms_by_origin"]) == {"agentproof"}
+    assert set(data["ms_by_origin"]) == {"agentproof", "ours"}
     assert data["graph_size"] == {"nodes": 7, "edges": 6, "gateways": 0}
     # parallel: start__split, summarise__join and end__join are inserted gateways
     assert verify(get("parallel")).graph_size == {"nodes": 10, "edges": 11, "gateways": 3}

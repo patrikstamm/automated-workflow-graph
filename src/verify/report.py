@@ -118,6 +118,16 @@ def _findings_for(graph: WorkflowGraph, check: CheckResult) -> list[Finding]:
                         f'The order rule "{raw["dsl"]}" is broken on this path.',
                         note=PARALLEL_NOTE if crosses_parallel else "")]
 
+    if cid == "data_flow":
+        findings = []
+        for m in raw["missing"]:
+            step, value = origin_of(m["node"]), m["value"]
+            reason = ("nothing writes it before this step on the path below"
+                      if m["written_anywhere"] else "no step in the workflow writes it")
+            findings.append(Finding(o, cid, "FAIL", [step], path(m["witness"]),
+                                    f'Step "{step}" reads "{value}", but {reason}.'))
+        return findings
+
     # Unknown check (e.g. a newer AgentProof): report it rather than drop it.
     return [Finding(o, cid, "FAIL", [], [], f'Check "{cid}" failed.')]
 
