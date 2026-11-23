@@ -15,6 +15,7 @@ LABELS = {
     "tool_declarations": "Tool not named",
     "data_flow": "Value read before it is written",
     "soundness": "Branches do not fit together",
+    "parallel_conflict": "Parallel steps get in each other's way",
 }
 
 

@@ -22,6 +22,36 @@ CHECK_ID = "data_flow"
 
 
 def check_data_flow(graph: WorkflowGraph, config: VerifyConfig) -> CheckResult:
+    succs: dict[str, list[str]] = defaultdict(list)
+    for e in graph.edges:
+        succs[e.source].append(e.target)
+    universe = set(config.inputs) | {v for n in graph.nodes for v in n.metadata.writes}
+    incoming, out = _analyse(graph, config)
+
+    reachable = _reachable(graph.entry_id, succs)
+    missing = []
+    for n in graph.nodes:
+        if n.id not in reachable:
+            continue                      # unreachable steps are AgentProof's finding, not a data-flow one
+        for value in n.metadata.reads:
+            if value not in incoming[n.id]:
+                missing.append({
+                    "node": n.id,
+                    "value": value,
+                    "written_anywhere": value in universe,
+                    "witness": _witness(graph, succs, out, n.id, value),
+                })
+
+    return CheckResult(ORIGIN, CHECK_ID, "FAIL" if missing else "PASS", {"missing": missing})
+
+
+def available_before(graph: WorkflowGraph, config: VerifyConfig) -> dict[str, set[str]]:
+    """For each node, the values that are written on every path before it runs.
+    Also used by the parallel-conflicts check."""
+    return _analyse(graph, config)[0]
+
+
+def _analyse(graph: WorkflowGraph, config: VerifyConfig) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     preds: dict[str, list[str]] = defaultdict(list)
     succs: dict[str, list[str]] = defaultdict(list)
     for e in graph.edges:
@@ -60,22 +90,7 @@ def check_data_flow(graph: WorkflowGraph, config: VerifyConfig) -> CheckResult:
                 if s not in queued:
                     queue.append(s)
                     queued.add(s)
-
-    reachable = _reachable(graph.entry_id, succs)
-    missing = []
-    for n in graph.nodes:
-        if n.id not in reachable:
-            continue                      # unreachable steps are AgentProof's finding, not a data-flow one
-        for value in n.metadata.reads:
-            if value not in incoming[n.id]:
-                missing.append({
-                    "node": n.id,
-                    "value": value,
-                    "written_anywhere": value in universe,
-                    "witness": _witness(graph, succs, out, n.id, value),
-                })
-
-    return CheckResult(ORIGIN, CHECK_ID, "FAIL" if missing else "PASS", {"missing": missing})
+    return incoming, out
 
 
 def _reachable(entry: str, succs: dict[str, list[str]]) -> set[str]:

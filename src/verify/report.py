@@ -16,6 +16,8 @@ PARALLEL_NOTE = ("The path goes through parallel branches. AgentProof checks par
                  "of them runs, so this may be a false alarm. Not sent to repair.")
 SEARCH_LIMIT_NOTE = ("A search bound was hit, so soundness is neither proved nor disproved. "
                      "Not sent to repair.")
+RUNTIME_ARG_NOTE = ("The conflict depends on an argument known only at run time (a \"$value\"), so it may be "
+                    "a false alarm. Not sent to repair.")
 
 
 @dataclass
@@ -159,6 +161,20 @@ def _findings_for(graph: WorkflowGraph, check: CheckResult) -> list[Finding]:
                                     note=SEARCH_LIMIT_NOTE))
         return findings
 
+    if cid == "parallel_conflict":
+        findings = []
+        for pair in raw["pairs"]:
+            certain = [c for c in pair["conflicts"] if not c["uncertain"]]
+            shown = certain or pair["conflicts"]
+            a, b = origin_of(pair["a"]), origin_of(pair["b"])
+            reasons = _unique(_conflict_text(c, origin_of) for c in shown)
+            findings.append(Finding(
+                o, cid, "FAIL" if certain else "INCONCLUSIVE", [a, b], path(pair["witness"]),
+                f'Steps "{a}" and "{b}" run in parallel, but {"; ".join(reasons)}. Run them one after the '
+                f'other, or change them so they do not use the same value or tool resource.',
+                note="" if certain else RUNTIME_ARG_NOTE))
+        return findings
+
     # Unknown check (e.g. a newer AgentProof): report it rather than drop it.
     return [Finding(o, cid, "FAIL", [], [], f'Check "{cid}" failed.')]
 
@@ -213,6 +229,15 @@ def _merge_into_dead_ends(graph: WorkflowGraph, findings: list[Finding]) -> list
 
 
 # ---------- helpers ----------
+
+def _conflict_text(c: dict, origin_of) -> str:
+    writer, other, name = origin_of(c["writer"]), origin_of(c["other"]), c["name"]
+    if c["on"] == "state":
+        return (f'both write "{name}"' if c["kind"] == "write_write"
+                else f'"{writer}" writes "{name}" while "{other}" reads it')
+    return (f'both change the tool resource "{name}"' if c["kind"] == "write_write"
+            else f'"{writer}" changes the tool resource "{name}" while "{other}" reads it')
+
 
 def _is_and_split(graph: WorkflowGraph, node_id: str) -> bool:
     gate = graph.node(node_id).metadata.gateway
