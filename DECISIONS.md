@@ -142,6 +142,13 @@ Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module
 
 1. **Separate our contribution from AgentProof's six checks**, in the code (`src/verify/baseline/` vs `src/verify/ours/`) and in reported results. Every finding carries `origin: agentproof | ours`.
 2. **Bound the state-space search** (state limit, loop bound, timeout). If a bound is hit, the result is **INCONCLUSIVE, never PASS**. Report verification time as graph size grows. Use the RPST block tree to skip the search where possible: sequence blocks, simple branch blocks and loop blocks are decided by pattern, so only rigid blocks need a search, each on its own subgraph.
+   - **How we do it (differs from the slides):** we do not build the RPST. The soundness check uses SESE fragment
+     reduction (Vanhatalo, Völzer & Leymann, ICSOC 2007): sequence, branch and loop fragments are decided by
+     pattern and collapsed into one edge, innermost first; only what is left is searched. What is left is
+     searched as one subgraph, so a simple fragment that contains a rigid one is searched together with it,
+     not separately. The RPST is built later for refactoring (Step 7).
+   - Bounds: `max_states` (default 10,000) and `timeout_s` (default 2 s). There is **no loop bound**: a second
+     token on an edge is reported as a fault and not explored further, so the number of states is finite.
 3. **Bernstein's conditions also cover tool side effects**: catalog resources (e.g. `gmail:inbox`) as well as state values. When a resource name depends on an argument known only at run time, assume a conflict.
 4. **Measure real execution**: time, tokens and task accuracy per node and per run. Fewer nodes does not mean faster.
 5. **"Best version" = Pareto selection** over accuracy, cost and latency (see section 6).
@@ -157,7 +164,7 @@ Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module
 
 - Possible results: **PASS**, **FAIL**, **INCONCLUSIVE**.
 - **INCONCLUSIVE**: the workflow is exported **with a warning**. It is reported as **its own category** and is **not** sent to repair. Causes:
-  - a search bound was hit (our checks, Step 5)
+  - a search bound was hit (our soundness check: `max_states` or `timeout_s`)
   - an AgentProof order-rule violation whose path goes through an AND-split: AgentProof checks parallel
     branches as if only one of them runs, so the violation may be a false alarm
 - **FAIL**: the witness trace goes back to the LLM as a repair instruction.
@@ -222,6 +229,23 @@ Built in five sub-steps: 5.1 data flow, 5.2 soundness, 5.3 parallel conflicts, 5
   be written by a step. CLI: `--input VALUE`.
 - One FAIL finding per step and missing value, with a path on which the value is never written.
   Steps that cannot be reached from the start are skipped (AgentProof reports those).
+
+**Soundness (`soundness.py`)**: no deadlock and no lack of synchronisation (Vanhatalo, Völzer & Leymann, ICSOC 2007).
+- Token game on the normalized graph: an AND-join waits for all incoming branches, an XOR-join for any one;
+  a router or branching human chooses one outgoing edge, every other step uses all of them. End steps take the
+  token away; the run is finished when no token is left, so several end steps are allowed.
+- **Lack of synchronisation**: an edge gets a second token, so a step runs twice at the same time
+  (e.g. parallel branches into `"join": "any"`). **Deadlock**: no step can run but tokens are left
+  (e.g. a router's branches into `"join": "all"`).
+- Phase 1, patterns: sequence, branch and loop fragments are collapsed. A branch fragment with AND-split +
+  XOR-join is lack of synchronisation, XOR-split + AND-join is deadlock; an XOR loop is sound.
+- Phase 2, search: whatever is left is searched breadth-first over token placements, with the collapsed
+  fragments as single edges, within `max_states` and `timeout_s` (section 4, suggestion 2). Hitting a bound
+  gives an INCONCLUSIVE finding (not repaired); faults found before the bound still FAIL.
+- The raw result records how many fragments were decided by each pattern, whether a search was needed, the
+  size of the searched part and the number of states, for the scalability benchmark (5.5).
+- The witness is the firing order up to the faulty step, in the LLM's node ids. A step with no outgoing edge
+  takes the token away like an end step, so dead ends are reported only by AgentProof.
 
 ## 6. Choosing the best version
 
