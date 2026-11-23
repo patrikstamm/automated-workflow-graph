@@ -15,8 +15,6 @@ Last updated: 2026-11-23.
 
 ## 1. Graph format
 
-Status: **agreed.**
-
 ### 1.1 Two layers
 
 | Layer | Written by | Purpose |
