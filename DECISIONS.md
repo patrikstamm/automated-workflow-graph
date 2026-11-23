@@ -209,6 +209,20 @@ Updating the format rules in `src/prompt.py` belongs to the prompt-to-LLM module
 - The Gmail, Sheets and Calendar tools in `src/catalog.py` are enabled as stubs: generation and verification
   only read their names and parameters; they are not executed until mock tools exist (section 7).
 
+### 5.3 Our checks (`src/verify/ours/`, origin `ours`)
+
+Built in five sub-steps: 5.1 data flow, 5.2 soundness, 5.3 parallel conflicts, 5.4 exact order rules,
+5.5 scalability benchmark. They never import `agentproof`; `run_ours()` times each check (`ours.<check_id>`).
+
+**Data flow (`data_flow.py`)**: every value a step reads must be written before it, on every path that reaches it.
+- A forward analysis on the normalized graph: an XOR-join keeps the values written on **every** incoming
+  branch, an AND-join keeps the values written on **any** branch, and loops are iterated until nothing changes.
+  A value written in a parallel sibling branch only counts after the join.
+- `VerifyConfig.inputs` names values that are available at the start (e.g. `email`); every other value must
+  be written by a step. CLI: `--input VALUE`.
+- One FAIL finding per step and missing value, with a path on which the value is never written.
+  Steps that cannot be reached from the start are skipped (AgentProof reports those).
+
 ## 6. Choosing the best version
 
 - Keep the Pareto front over (accuracy ↑, cost ↓, latency ↓).
