@@ -13,3 +13,6 @@ venv/
 
 # Local record/replay cache of LLM answers (src/llm/replay.py)
 .llm_cache/
+
+# ignore local config files (patrik's test files)
+testllm.py
