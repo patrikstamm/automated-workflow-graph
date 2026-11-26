@@ -68,7 +68,12 @@ def calendar_create(title: str, time: str, attendees: list[str]) -> str:
     """Create a calendar event."""
     raise NotImplementedError
  
- 
+#---------- Reseach Tools ----------
+@tool
+def web_search(query: str) -> list[dict]:
+    """Search the web and return a list of results."""
+    raise NotImplementedError
+
 # ---------- Lists other files use ----------
  
 TOOLS = [
@@ -76,6 +81,7 @@ TOOLS = [
     gmail_search, gmail_read, gmail_send, gmail_label,
     sheets_read, sheets_append,
     calendar_list, calendar_create,
+    web_search
 ]
  
 # Look up a tool by its name: TOOLS_BY_NAME["sheets_append"]
@@ -91,4 +97,5 @@ RESOURCES = {
     "sheets_append":   {"reads": [],                 "writes": ["sheets:{sheet}"]},
     "calendar_list":   {"reads": ["calendar"],       "writes": []},
     "calendar_create": {"reads": [],                 "writes": ["calendar"]},
+    "web_search":      {"reads": [],                 "writes": []},
 }
