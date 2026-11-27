@@ -8,10 +8,6 @@ task → LLM draft (JSON) → format check → normalize → verify ──PASS�
                                                        │
                                                       FAIL → repair message → LLM fixes it (max 3 rounds)
 ```
-
-All team decisions (graph format, providers, verdicts, evaluation) are in [DECISIONS.md](DECISIONS.md).
-Read it before changing anything shared.
-
 ---
 
 ## 1. What you need
